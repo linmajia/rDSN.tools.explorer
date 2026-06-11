@@ -38,8 +38,17 @@
 # include "explorer.h"
 # include <dsn/service_api_c.h>
 # include <dsn/tool-api/command.h>
+# include <atomic>
+# include <cerrno>
+# include <cstring>
 # include <fstream>
 # include <sstream>
+# ifdef _WIN32
+# include <windows.h>
+# else
+# include <sys/wait.h>
+# include <unistd.h>
+# endif
 
 namespace dsn 
 {
@@ -87,9 +96,9 @@ namespace dsn
 
         static std::string explorer_get_task_id(int nid, int task_code)
         {
-            char buffer[32];
-            sprintf(buffer, "%d.%d", nid, task_code);
-            return buffer;
+            std::stringstream ss;
+            ss << nid << "." << task_code;
+            return ss.str();
         }
 
         struct dot_task_config
@@ -120,6 +129,187 @@ namespace dsn
 
         static std::vector<dot_task_config> s_dot_configs;
 
+        static std::string explorer_make_graph_file(const char* dir, int gid, const char* suffix, const char* ext)
+        {
+            std::stringstream ss;
+            ss << dir << "/exp-" << gid << suffix << ext;
+            return ss.str();
+        }
+
+        static bool explorer_write_dot_file(const std::string& file, const std::string& content, std::string& err)
+        {
+            std::ofstream dotff(file.c_str());
+            if (!dotff.is_open())
+            {
+                err = "failed to open " + file;
+                return false;
+            }
+
+            dotff << content;
+            dotff.close();
+            if (!dotff.good())
+            {
+                err = "failed to write " + file;
+                return false;
+            }
+
+            return true;
+        }
+
+#ifdef _WIN32
+        static std::string explorer_get_windows_error(DWORD error)
+        {
+            std::stringstream ss;
+            ss << "Windows error " << error;
+            return ss.str();
+        }
+
+        static std::string explorer_quote_windows_arg(const std::string& arg)
+        {
+            std::string quoted = "\"";
+            size_t backslashes = 0;
+            for (auto ch : arg)
+            {
+                if (ch == '\\')
+                {
+                    ++backslashes;
+                }
+                else if (ch == '"')
+                {
+                    quoted.append(backslashes * 2 + 1, '\\');
+                    quoted.push_back(ch);
+                    backslashes = 0;
+                }
+                else
+                {
+                    quoted.append(backslashes, '\\');
+                    quoted.push_back(ch);
+                    backslashes = 0;
+                }
+            }
+            quoted.append(backslashes * 2, '\\');
+            quoted.push_back('"');
+            return quoted;
+        }
+#endif
+
+        static bool explorer_run_dot(
+            const std::string& dot,
+            const char* format,
+            const std::string& output_file,
+            const std::string& input_file,
+            std::string& err
+            )
+        {
+            std::string format_arg = std::string("-T") + format;
+#ifdef _WIN32
+            std::stringstream command_line_builder;
+            command_line_builder
+                << explorer_quote_windows_arg(dot) << " "
+                << explorer_quote_windows_arg(format_arg) << " "
+                << explorer_quote_windows_arg("-o") << " "
+                << explorer_quote_windows_arg(output_file) << " "
+                << explorer_quote_windows_arg(input_file);
+
+            std::string command_line = command_line_builder.str();
+            STARTUPINFOA startup_info;
+            PROCESS_INFORMATION process_info;
+            ZeroMemory(&startup_info, sizeof(startup_info));
+            ZeroMemory(&process_info, sizeof(process_info));
+            startup_info.cb = sizeof(startup_info);
+
+            if (!CreateProcessA(
+                    nullptr,
+                    &command_line[0],
+                    nullptr,
+                    nullptr,
+                    FALSE,
+                    0,
+                    nullptr,
+                    nullptr,
+                    &startup_info,
+                    &process_info
+                    ))
+            {
+                err = "failed to start dot process: " + explorer_get_windows_error(GetLastError());
+                return false;
+            }
+
+            DWORD wait_result = WaitForSingleObject(process_info.hProcess, INFINITE);
+            if (wait_result == WAIT_FAILED)
+            {
+                err = "failed to wait for dot process: " + explorer_get_windows_error(GetLastError());
+                CloseHandle(process_info.hThread);
+                CloseHandle(process_info.hProcess);
+                return false;
+            }
+
+            DWORD exit_code = 0;
+            if (!GetExitCodeProcess(process_info.hProcess, &exit_code))
+            {
+                err = "failed to get dot process exit code: " + explorer_get_windows_error(GetLastError());
+                CloseHandle(process_info.hThread);
+                CloseHandle(process_info.hProcess);
+                return false;
+            }
+
+            CloseHandle(process_info.hThread);
+            CloseHandle(process_info.hProcess);
+            if (exit_code != 0)
+            {
+                std::stringstream ss;
+                ss << "dot process failed with exit code " << exit_code;
+                err = ss.str();
+                return false;
+            }
+
+            return true;
+#else
+            pid_t pid = fork();
+            if (pid < 0)
+            {
+                err = std::string("failed to fork dot process: ") + strerror(errno);
+                return false;
+            }
+            if (pid == 0)
+            {
+                execlp(dot.c_str(), dot.c_str(), format_arg.c_str(), "-o", output_file.c_str(), input_file.c_str(), static_cast<char*>(nullptr));
+                _exit(127);
+            }
+
+            int status = 0;
+            pid_t waited_pid;
+            do
+            {
+                waited_pid = waitpid(pid, &status, 0);
+            } while (waited_pid < 0 && errno == EINTR);
+
+            if (waited_pid < 0)
+            {
+                err = std::string("failed to wait for dot process: ") + strerror(errno);
+                return false;
+            }
+
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            {
+                std::stringstream ss;
+                ss << "dot process failed";
+                if (WIFEXITED(status))
+                {
+                    ss << " with exit code " << WEXITSTATUS(status);
+                }
+                else if (WIFSIGNALED(status))
+                {
+                    ss << " after signal " << WTERMSIG(status);
+                }
+                err = ss.str();
+                return false;
+            }
+
+            return true;
+#endif
+        }
+
         static void explorer_setup_dot_configs()
         {
             dot_task_config default_config;
@@ -131,14 +321,14 @@ namespace dsn
             for (int i = 0; i <= max_id; i++)
             {
                 auto& cfg = s_dot_configs[i];
-                char buffer[256];
-                sprintf(buffer, "task.%s", dsn_task_code_to_string((dsn_task_code_t)i));
-                read_config(buffer, cfg, &default_config);
+                std::string section_name = std::string("task.") + dsn_task_code_to_string((dsn_task_code_t)i);
+                read_config(section_name.c_str(), cfg, &default_config);
 
                 if (cfg.dot_label.length() == 0)
                 {
-                    sprintf(buffer, "%d", i);
-                    cfg.dot_label = buffer;
+                    std::stringstream label;
+                    label << i;
+                    cfg.dot_label = label.str();
                 }
             }
         }
@@ -648,7 +838,7 @@ namespace dsn
                 "explore the task dependencies as GraphViz dot graph (please set [tools.explorer] dot to produce pic immediately)",
                 [dot](const safe_vector<safe_string>& args) 
                 {
-                    static int graph_index = 0;
+                    static std::atomic<int> graph_index(0);
                     int gid = ++graph_index;
                     std::stringstream ss;
 
@@ -664,38 +854,45 @@ namespace dsn
                         all_task_explorer::instance().get_dot_graph(ss, &labels, args2);
 
                         auto dir = dsn_get_app_data_dir();
+                        std::string err;
+                        std::string graph_dot_file = explorer_make_graph_file(dir, gid, "", ".dot");
+                        std::string graph_jpg_file = explorer_make_graph_file(dir, gid, "", ".jpg");
+                        std::string labels_dot_file = explorer_make_graph_file(dir, gid, "-labels", ".dot");
+                        std::string labels_jpg_file = explorer_make_graph_file(dir, gid, "-labels", ".jpg");
 
                         // graph
                         {
-                            std::stringstream dotfile;
-                            dotfile << dir << "/exp-" << gid << ".dot";
+                            if (!explorer_write_dot_file(graph_dot_file, ss.str(), err))
+                            {
+                                derror("%s", err.c_str());
+                                return safe_string(err.c_str());
+                            }
 
-                            std::ofstream dotff(dotfile.str().c_str());
-                            dotff << ss.str();
-                            dotff.close();
-
-                            std::stringstream cmd;
-                            cmd << dot << " -Tjpg -o" << dir << "/exp-" << gid << ".jpg " << dir << "/exp-" << gid << ".dot";
-                            system(cmd.str().c_str());
+                            if (!explorer_run_dot(dot, "jpg", graph_jpg_file, graph_dot_file, err))
+                            {
+                                derror("%s", err.c_str());
+                                return safe_string(err.c_str());
+                            }
                         }
 
                         // labels
                         {
-                            std::stringstream dotfile;
-                            dotfile << dir << "/exp-" << gid << "-labels.dot";
+                            if (!explorer_write_dot_file(labels_dot_file, labels.str(), err))
+                            {
+                                derror("%s", err.c_str());
+                                return safe_string(err.c_str());
+                            }
 
-                            std::ofstream dotff(dotfile.str().c_str());
-                            dotff << labels.str();
-                            dotff.close();
-
-                            std::stringstream cmd;
-                            cmd << dot << " -Tjpg -o" << dir << "/exp-" << gid << "-labels.jpg " << dir << "/exp-" << gid << "-labels.dot";
-                            system(cmd.str().c_str());
+                            if (!explorer_run_dot(dot, "jpg", labels_jpg_file, labels_dot_file, err))
+                            {
+                                derror("%s", err.c_str());
+                                return safe_string(err.c_str());
+                            }
                         }
 
                         // output
                         std::stringstream output;
-                        output << "task deps dumped to " << dir << "/exp-" << gid << ".jpg with labels in exp-" << gid << "-labels.jpg";
+                        output << "task deps dumped to " << graph_jpg_file << " with labels in exp-" << gid << "-labels.jpg";
                         return safe_string(output.str().c_str());
                     }
                     else
