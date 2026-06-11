@@ -42,7 +42,9 @@
 # include <cerrno>
 # include <cstring>
 # include <fstream>
+# include <memory>
 # include <sstream>
+# include <vector>
 # ifdef _WIN32
 # include <windows.h>
 # else
@@ -384,15 +386,8 @@ namespace dsn
 
                 for (int i = 0; i < maxt + 1; i++)
                 {
-                    _explorers[i] = new task_explorer();
+                    _explorers[i].reset(new task_explorer());
                 }
-            }
-
-            ~per_node_task_explorer()
-            {
-                for (auto exp : _explorers)
-                    delete exp;
-                _explorers.clear();
             }
 
             void set_id(int nid, rpc_address addr, const char* name) { _node_id = nid; _address = addr; _name = name; }
@@ -477,15 +472,20 @@ namespace dsn
                         all_tasks.emplace(i);
 
                         // all intra edges
-                        for (int j = 0; j < (int)exp->_locals.size(); j++)
+                        std::vector<uint64_t> locals;
                         {
-                            if (exp->_locals[j] > 0)
+                            utils::auto_lock<utils::ex_lock_nr_spin> l(exp->_lock);
+                            locals = exp->_locals;
+                        }
+                        for (int j = 0; j < (int)locals.size(); j++)
+                        {
+                            if (locals[j] > 0)
                             {
                                 ss << "\t\t"
                                     << explorer_get_task_id(_node_id, i) << " -> "
                                     << explorer_get_task_id(_node_id, j)
                                     << " ["
-                                    << explorer_get_edge_props(_node_id, i, _node_id, j, exp->_locals[j])
+                                    << explorer_get_edge_props(_node_id, i, _node_id, j, locals[j])
                                     << "];"
                                     << std::endl;
                             }
@@ -582,7 +582,7 @@ namespace dsn
             rpc_address _address; 
             std::string _name;
 
-            std::vector<task_explorer*> _explorers;
+            std::vector<std::unique_ptr<task_explorer>> _explorers;
         };
 
         class all_task_explorer : public utils::singleton<all_task_explorer>
@@ -592,9 +592,8 @@ namespace dsn
             {
                 int count = dsn_get_all_apps(nullptr, 0) + 1;
                 
-                dsn_app_info* apps = (dsn_app_info*)alloca(sizeof(dsn_app_info) * count);
-                memset(apps, 0, sizeof(dsn_app_info) * count);
-                count = dsn_get_all_apps(apps, count - 1);
+                std::vector<dsn_app_info> apps(count);
+                count = dsn_get_all_apps(apps.data(), count - 1);
 
                 int max_id = 0;
                 for (int i = 0; i < count; i++)
@@ -791,7 +790,9 @@ namespace dsn
         static void explorer_on_task_wait_post(task* caller, task* callee, bool succ)
         {
             auto notifier_code = task_ext_for_explorer::get(callee);
-            all_task_explorer::instance().on_local_call((dsn_task_code_t)notifier_code, caller->spec().code);
+            all_task_explorer::instance().on_local_call(
+                (dsn_task_code_t)notifier_code,
+                caller ? caller->spec().code : TASK_CODE_INVALID);
         }
         
         void explorer::install(service_spec& spec)
@@ -892,7 +893,7 @@ namespace dsn
 
                         // output
                         std::stringstream output;
-                        output << "task deps dumped to " << graph_jpg_file << " with labels in exp-" << gid << "-labels.jpg";
+                        output << "task deps dumped to " << graph_jpg_file << " with labels in " << labels_jpg_file;
                         return safe_string(output.str().c_str());
                     }
                     else
