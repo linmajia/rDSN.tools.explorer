@@ -42,7 +42,6 @@
 # include <cerrno>
 # include <cstring>
 # include <fstream>
-# include <memory>
 # include <sstream>
 # include <vector>
 # ifdef _WIN32
@@ -386,8 +385,15 @@ namespace dsn
 
                 for (int i = 0; i < maxt + 1; i++)
                 {
-                    _explorers[i].reset(new task_explorer());
+                    _explorers[i] = new task_explorer();
                 }
+            }
+
+            ~per_node_task_explorer()
+            {
+                for (auto exp : _explorers)
+                    delete exp;
+                _explorers.clear();
             }
 
             void set_id(int nid, rpc_address addr, const char* name) { _node_id = nid; _address = addr; _name = name; }
@@ -582,7 +588,7 @@ namespace dsn
             rpc_address _address; 
             std::string _name;
 
-            std::vector<std::unique_ptr<task_explorer>> _explorers;
+            std::vector<task_explorer*> _explorers;
         };
 
         class all_task_explorer : public utils::singleton<all_task_explorer>
