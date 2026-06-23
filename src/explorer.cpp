@@ -55,6 +55,18 @@ namespace dsn
 {
     namespace tools 
     {
+# ifdef _WIN32
+        static std::string explorer_get_windows_error(DWORD error);
+
+        static void explorer_close_handle(HANDLE handle)
+        {
+            if (CloseHandle(handle) == FALSE)
+            {
+                derror("CloseHandle failed, err = %s", explorer_get_windows_error(GetLastError()).c_str());
+            }
+        }
+# endif
+
         class task_explorer
         {
         public:
@@ -240,8 +252,8 @@ namespace dsn
             if (wait_result == WAIT_FAILED)
             {
                 err = "failed to wait for dot process: " + explorer_get_windows_error(GetLastError());
-                CloseHandle(process_info.hThread);
-                CloseHandle(process_info.hProcess);
+                explorer_close_handle(process_info.hThread);
+                explorer_close_handle(process_info.hProcess);
                 return false;
             }
 
@@ -249,13 +261,13 @@ namespace dsn
             if (!GetExitCodeProcess(process_info.hProcess, &exit_code))
             {
                 err = "failed to get dot process exit code: " + explorer_get_windows_error(GetLastError());
-                CloseHandle(process_info.hThread);
-                CloseHandle(process_info.hProcess);
+                explorer_close_handle(process_info.hThread);
+                explorer_close_handle(process_info.hProcess);
                 return false;
             }
 
-            CloseHandle(process_info.hThread);
-            CloseHandle(process_info.hProcess);
+            explorer_close_handle(process_info.hThread);
+            explorer_close_handle(process_info.hProcess);
             if (exit_code != 0)
             {
                 std::stringstream ss;
