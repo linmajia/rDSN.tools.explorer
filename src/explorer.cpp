@@ -2,8 +2,8 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2015 Microsoft Corporation
- * 
- * -=- Robust Distributed System Nucleus (rDSN) -=- 
+ *
+ * -=- Robust Distributed System Nucleus (rDSN) -=-
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -51,9 +51,9 @@
 # include <unistd.h>
 # endif
 
-namespace dsn 
+namespace dsn
 {
-    namespace tools 
+    namespace tools
     {
 # ifdef _WIN32
         static std::string explorer_get_windows_error(DWORD error);
@@ -77,7 +77,7 @@ namespace dsn
                 _msg_count.store(0);
                 _lpc_count.store(0);
             }
-            
+
             void on_message_recv(message_ex* msg, int caller)
             {
                 ++_msg_count;
@@ -90,7 +90,7 @@ namespace dsn
                 ++_lpc_count;
 
                 utils::auto_lock<utils::ex_lock_nr_spin> l(_lock);
-                ++_locals[callee];                
+                ++_locals[callee];
             }
 
             uint64_t count() { return _msg_count.load() + _lpc_count.load(); }
@@ -383,7 +383,7 @@ namespace dsn
 
             return ss.str();
         }
-                
+
         DEFINE_TASK_CODE(LPC_CONTROL_SERVICE_APP, TASK_PRIORITY_HIGH, THREAD_POOL_DEFAULT)
         class per_node_task_explorer
         {
@@ -415,7 +415,7 @@ namespace dsn
             rpc_address address() const { return _address; }
 
             std::string name() const { return _name; }
-            
+
             void on_message_recv(message_ex* msg, int caller, int callee)
             {
                 _explorers[callee]->on_message_recv(msg, caller);
@@ -427,7 +427,7 @@ namespace dsn
                 _explorers[callee]->increase_lpc_count();
             }
 
-            // <source node address, sent task kinds> 
+            // <source node address, sent task kinds>
             void collect_out_tasks(std::unordered_map<uint64_t, std::unordered_set<int> >& outs)
             {
                 for (int i = 0; i < (int)_explorers.size(); i++)
@@ -468,13 +468,13 @@ namespace dsn
 
             // intra node
             void draw_dot_graph1(
-                std::stringstream& ss, 
-                const std::unordered_set<int>& out_tasks, 
+                std::stringstream& ss,
+                const std::unordered_set<int>& out_tasks,
                 std::set<int>& all_tasks
             )
             {
                 ss << "\tsubgraph cluster" << node_id() << " { " << std::endl;
-                
+
                 // global properties
                 ss << "\t\t" << "label = \"" << name() << " @ " << address().to_std_string() << " (id=" << node_id() << ")\";" << std::endl;
                 ss << "\t\t" << std::endl;
@@ -483,7 +483,7 @@ namespace dsn
                 {
                     auto& exp = _explorers[i];
                     if (exp->count() > 0 || out_tasks.find(i) != out_tasks.end())
-                    {                        
+                    {
                         // all used tasks in an node
                         ss << "\t\t" << explorer_get_task_id(_node_id, i) << " ["
                             << explorer_get_task_props(_node_id, i) << "];" << std::endl;
@@ -516,7 +516,7 @@ namespace dsn
                 ss << "\t" << std::endl;
             }
 
-            
+
             // inter-node
             void draw_dot_graph2(
                 std::stringstream& ss,
@@ -596,8 +596,8 @@ namespace dsn
             }
 
         private:
-            int _node_id;            
-            rpc_address _address; 
+            int _node_id;
+            rpc_address _address;
             std::string _name;
 
             std::vector<task_explorer*> _explorers;
@@ -609,7 +609,7 @@ namespace dsn
             all_task_explorer()
             {
                 int count = dsn_get_all_apps(nullptr, 0) + 1;
-                
+
                 std::vector<dsn_app_info> apps(count);
                 count = dsn_get_all_apps(apps.data(), count - 1);
 
@@ -621,7 +621,7 @@ namespace dsn
                 }
 
                 _explorers.resize((size_t)(max_id + 1));
-                
+
                 for (int i = 0; i < count; i++)
                 {
                     auto& exp = _explorers[apps[i].app_id];
@@ -644,7 +644,7 @@ namespace dsn
             {
                 std::stringstream* lss = &ss;
                 ss << "digraph G { " << std::endl;
-                if (labels) 
+                if (labels)
                 {
                     *labels << "digraph G { " << std::endl;
                     lss = labels;
@@ -655,7 +655,7 @@ namespace dsn
                 // need to collect those missing statistics first to avoid
                 // missing nodes in the sources
 
-                // <source node address, sent task kinds> 
+                // <source node address, sent task kinds>
                 std::unordered_map<uint64_t, std::unordered_set<int> > outgoing_tasks;
                 for (auto& exp : _explorers)
                     exp.collect_out_tasks(outgoing_tasks);
@@ -692,7 +692,7 @@ namespace dsn
                 if (labels) *labels << "}" << std::endl;
             }
 
-            
+
         private:
             std::vector<per_node_task_explorer> _explorers; // app_id as index
             std::map<uint64_t, per_node_task_explorer*> _explorers_by_addr;
@@ -724,7 +724,7 @@ namespace dsn
                     auto callee2 = static_cast<rpc_response_task*>(callee);
                     message_ext_for_explorer::get(callee2->get_request()) = (uint64_t)(caller ? caller->spec().code : TASK_CODE_INVALID);
                 }
-                break;            
+                break;
             default:
                 break;
             }
@@ -732,7 +732,7 @@ namespace dsn
 
         static void explorer_on_task_enqueue(task* caller, task* callee)
         {
-            //callee->spec().type == dsn_task_type_t::TASK_TYPE_COMPUTE && 
+            //callee->spec().type == dsn_task_type_t::TASK_TYPE_COMPUTE &&
             if (caller)
             {
                 task_ext_for_explorer::get(callee) = (uint64_t)(caller->spec().code);
@@ -741,7 +741,7 @@ namespace dsn
 
         static void explorer_on_aio_enqueue(aio_task* callee)
         {
-            //callee->spec().type == dsn_task_type_t::TASK_TYPE_COMPUTE && 
+            //callee->spec().type == dsn_task_type_t::TASK_TYPE_COMPUTE &&
             if (task::get_current_task())
             {
                 task_ext_for_explorer::get(callee) = (uint64_t)(task::get_current_task()->spec().code);
@@ -760,13 +760,13 @@ namespace dsn
                     {
                         all_task_explorer::instance().on_local_call(caller_code, t->spec().code);
                     }
-                }                
+                }
                 break;
             default:
                 break;
             }
         }
-        
+
         static void explorer_on_rpc_call(task* caller, message_ex* req, rpc_response_task* callee)
         {
             // attach caller task-code for one-way rpc only as two-way rpc is tracked in on_ask_create above
@@ -799,7 +799,7 @@ namespace dsn
 
         // notify
         static void explorer_on_task_wait_notified(task* task)
-        {            
+        {
             // set notifier
             task_ext_for_explorer::get(task) = task->spec().code;
         }
@@ -812,16 +812,16 @@ namespace dsn
                 (dsn_task_code_t)notifier_code,
                 caller ? caller->spec().code : TASK_CODE_INVALID);
         }
-        
+
         void explorer::install(service_spec& spec)
         {
-            dassert(get_current_tool()->name() == "emulator", 
+            dassert(get_current_tool()->name() == "emulator",
                 "currently dsn.tools.explorer only works with the emulator tool, please set [core] tool = emulator"
             );
 
-            std::string dot = dsn_config_get_value_string("tools.explorer", "dot", "", "the command path to dot to visualize the graph");            
+            std::string dot = dsn_config_get_value_string("tools.explorer", "dot", "", "the command path to dot to visualize the graph");
             auto explore = dsn_config_get_value_bool("task..default", "is_explore", true, "whether to explore this kind of task");
-            
+
             explorer_setup_dot_configs();
 
             for (int i = 0; i <= dsn_task_code_max(); i++)
@@ -855,7 +855,7 @@ namespace dsn
             ::dsn::register_command({ "explore", "exp" },
                 "explore the task dependencies as GraphViz dot graph (please set [tools.explorer] dot to produce pic immediately)",
                 "explore the task dependencies as GraphViz dot graph (please set [tools.explorer] dot to produce pic immediately)",
-                [dot](const safe_vector<safe_string>& args) 
+                [dot](const safe_vector<safe_string>& args)
                 {
                     static std::atomic<int> graph_index(0);
                     int gid = ++graph_index;
@@ -918,7 +918,7 @@ namespace dsn
                     {
                         all_task_explorer::instance().get_dot_graph(ss, nullptr, args2);
                         return safe_string(ss.str().c_str());
-                    }    
+                    }
                 }
                 );
         }
