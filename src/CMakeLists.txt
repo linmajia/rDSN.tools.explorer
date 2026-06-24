@@ -1,7 +1,7 @@
 set(MY_PROJ_NAME dsn.tools.explorer)
 
 if (DEFINED DSN_CMAKE_INCLUDED)
-else()    
+else()
     set(DSN_ROOT "$ENV{DSN_ROOT}")
     if(NOT EXISTS "${DSN_ROOT}/")
         message(FATAL_ERROR "Please make sure that ${DSN_ROOT} exists.")
