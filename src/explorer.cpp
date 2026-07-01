@@ -44,6 +44,8 @@
 # include <fstream>
 # include <sstream>
 # include <vector>
+# include <set>
+# include <unordered_set>
 # ifdef _WIN32
 # include <windows.h>
 # else
